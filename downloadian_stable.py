@@ -2,34 +2,43 @@
 import socket
 import base64
 import os
-#import time
+import time
+
+# KB is 1000 Bytes and so on! (according to standards, KiB is 1024 Bytes and so on)
+def representWeight(ln,affix):
+    if ln < 1000:
+        return str(ln) + 'bytes' + affix
+    elif ln < 1000*1000:
+        return str(round(ln/1000)) + 'KB' + affix
+    else:
+        return str(round(ln/(1000*1000),1)) + 'MB' + affix
+
+def representTime(time):
+    if time < 60:
+        return str(time) + ' s'
+    elif time < 60*60:
+        return str(round(time/(60))) + ' mins'
+    else:
+        return str(round(time/(60*60),1)) + ' hours'
 
 # THIS CLASS IS FOR PROGRESSBAR
 class MonitoringProgress():
     def __init__(self):
         self.maxlen = 0
-        #self.lastspeed = 0
 
-    def update(self, downloaded, content_length):
+    def update(self, downloaded, content_length, speed):
         if content_length == -1:
-            monitoring = '[unknown] ' + str(downloaded) + ' bytes'
+            monitoring = '[unknown] ' + representWeight(downloaded,'')
         else:
             monitoring = '['
             progress = (downloaded/content_length)*100
             for i in range(int(progress/2)): monitoring += '='
             for i in range(50-int(progress/2)): monitoring += ' '
             monitoring += '] ' + str(round(progress,2)) + '%'
-            monitoring += ' ' + str(downloaded) + '/' + str(content_length) + ' bytes'
-        '''if speed == -1: speed = self.lastspeed
-        monitoring += ' ('
-        if speed < 1024:
-            monitoring += str(round(speed)) + 'bytes/s'
-        elif speed < 1024*1024:
-            monitoring += str(round(speed/1024)) + 'KB/s'
-        else:
-            monitoring += str(round(speed/(1024*1024),1)) + 'MB/s'
-        monitoring += ')'
-        self.lastspeed = speed'''
+            monitoring += ' ' + representWeight(downloaded,'') + '/' + representWeight(content_length,'')
+        monitoring += ' (' + representWeight(speed,'/s') + ')'
+        if content_length != -1:
+            monitoring += ' ~' + representTime(round((content_length-downloaded)/speed))
 
         curlen = len(monitoring)
         if curlen > self.maxlen: self.maxlen = curlen
@@ -66,29 +75,48 @@ class BufToDisk:
 if not os.path.exists('DOWNLOADIAN_DOWNLOADS'):
     os.makedirs('DOWNLOADIAN_DOWNLOADS')
 
+
 username, password = '', ''
-isProxy = 0
+controlVars = {'proxy':['PROXY AUTHORIZATION',0], 'headers':['HEADERS DISPLAYING',0]}
+
 
 def download(url):
     _indexAfterHTTP = url.index('//')+2
-    _afterHTTP = url[url.index('//')+2:]
+    _afterHTTP = url[_indexAfterHTTP:]
     domain, filename = '', 'DOWNLOADIAN_DOWNLOADS/'
+    ext = ''
     try:
         domain = url[_indexAfterHTTP:_indexAfterHTTP+_afterHTTP.index('/')]
         point = url.rindex('.')
+        namext = ''
         if point > _indexAfterHTTP+_afterHTTP.index('/'):
-            filename += url[url.rindex('/')+1:]
+            try:
+                qmark = url.rindex('?')
+                namext = url[url.rindex('/')+1:qmark]
+            except:
+                namext = url[url.rindex('/')+1:]
+            name = ''
+            name, ext = namext[:namext.rindex('.')], namext[namext.rindex('.'):]
+            filename += name
         else:
-            filename += domain + '_file.html'
+            filename += domain
+            ext = '.html'
     except:
         domain = url[_indexAfterHTTP:]
-        filename += domain + '_file.html'
+        filename += domain
+        ext = '.html'
+
+    if os.path.exists(filename+ext):
+        i = 1
+        while os.path.exists(filename+'(copy '+str(i)+')'+ext): i += 1
+        filename += '(copy '+str(i)+')'
+    filename += ext
 
     asset = socket.socket()
     asset.connect((domain, 80))
 
     request = 'GET ' + url + ' HTTP/1.1\r\nHost:' + domain + '\r\n'
-    if isProxy:
+    if controlVars['proxy']:
         request += 'Proxy-authorization: Basic ' + base64.encodestring((username+':'+password).encode('utf-8')).decode('utf-8') + '\r\n'
     request += '\r\n'
     asset.send(request.encode('utf-8'))
@@ -97,7 +125,10 @@ def download(url):
     while not('\r\n\r\n' in r.decode('utf-8')):
         r += asset.recv(1)
     _header = r.decode('utf-8')
-    print(_header[:-4])
+    if _header[:_header.index('\n')].split(' ')[1] == '200' and not(controlVars['headers'][1]):
+        print(_header[:_header.index('\n')])
+    else:
+        print(_header[:-4])
 
     endcondition = 0
     try:
@@ -110,37 +141,29 @@ def download(url):
     maxtraffic = 10*1024*1024
     downloaded = 0
     progress = 0.0
-    buffer = BufToDisk(100*1024*1024, filename)
+    buffer = BufToDisk(5*1024*1024, filename)
 
     r = b''
     def c0(): return downloaded < content_length
     def c1(): return not(b'\r\n\r\n' in r)
     conditions = (c0, c1)
 
-    #stime = etime = time.time()
-    #delta = 0
 
     if endcondition == 1: content_length = -1
     monitoring = MonitoringProgress()
     while conditions[endcondition]():
         r = b''
         try:
+            time.sleep(1)
             while not(r):
                 asset.settimeout(10)
                 r = asset.recv(maxtraffic)
-                #etime = time.time()
         except:
-            print('\nUNEXPECTED NETWORK ERROR. DOWNLOADED DATA SAVED.')
+            print('\n#UNEXPECTED NETWORK ERROR. DOWNLOADED DATA SAVED.')
             break
         buffer.write(r)
         downloaded += len(r)
-        #delta += len(r)
-        #if etime - stime > 2:
-            #monitoring.update(downloaded, content_length, delta/(etime-stime))
-            #stime = time.time()
-            #delta = 0
-        #else:
-        monitoring.update(downloaded, content_length)
+        monitoring.update(downloaded, content_length, len(r))
 
     if endcondition == 1: print()
     buffer.close(1)
@@ -154,5 +177,7 @@ print('RTFM: just COPY-PASTE URL and press ENTER or type close/exit')
 while 1:
     url = input('> ')
     if url in ('close','exit'): break
-    if url == 'proxy': isProxy = 1
+    if url in controlVars:
+        controlVars[url][1] = not(controlVars[url][1])
+        print('#'+controlVars[url][0]+' IS '+('OFF','ON')[controlVars[url][1]])
     else: download(url)
