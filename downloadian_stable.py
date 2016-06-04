@@ -5,13 +5,13 @@ import os
 import time
 
 # KB is 1000 Bytes and so on! (according to standards, KiB is 1024 Bytes and so on)
-def representWeight(ln,affix):
+def representWeight(ln,suffix):
     if ln < 1000:
-        return str(ln) + 'bytes' + affix
+        return str(ln) + 'bytes' + suffix
     elif ln < 1000*1000:
-        return str(round(ln/1000)) + 'KB' + affix
+        return str(round(ln/1000)) + 'KB' + suffix
     else:
-        return str(round(ln/(1000*1000),1)) + 'MB' + affix
+        return str(round(ln/(1000*1000),1)) + 'MB' + suffix
 
 def representTime(time):
     if time < 60:
