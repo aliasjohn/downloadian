@@ -1,8 +1,7 @@
 # downloadian
 Python HTTP (Proxy+) File Downloader
 
-### Description or Why is it all about reinvention the wheel
-I started coding "Downloadian" just for learning and fun. The work this console program does any web-browser does.
+### Description
 Some tags for you: Sockets in Python (3.4, actually), HTTP protocol, Proxy authorization.
 
 ### Manual
@@ -13,4 +12,6 @@ Some tags for you: Sockets in Python (3.4, actually), HTTP protocol, Proxy autho
    3. Launch the program and type ```proxy```;
    4. Finally, COPY-and-PASTE URL and press ENTER.
 
-That is the way it works.
+### Commands
+1. proxy - to enable or disable proxy
+2. headers - to enable or disable displaying headers in 200 case
