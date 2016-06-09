@@ -1,50 +1,64 @@
+#!/usr/bin/env python3
 ''' Downloadian 1.0 '''
 import socket
 import base64
 import os
 import time
+import threading
 
-# KB is 1000 Bytes and so on! (according to standards, KiB is 1024 Bytes and so on)
-def representWeight(ln,suffix):
-    if ln < 1000:
-        return str(ln) + 'bytes' + suffix
-    elif ln < 1000*1000:
-        return str(round(ln/1000)) + 'KB' + suffix
+KBSIZE = 1024
+BFSIZE = 10
+DOWNDELAY = 0.5
+TIME = (60, ' seconds', ' minutes', ' hours')
+INFQ = (KBSIZE, 'bytes', 'KB', 'MB')
+SPD = (KBSIZE, ' bytes/s', ' KB/s', ' MB/s')
+
+def representWeight(weight,base):
+    if weight < base[0]:
+        return str(weight) + base[1]
+    elif weight < base[0]**2:
+        return str(round(weight/base[0])) + base[2]
     else:
-        return str(round(ln/(1000*1000),1)) + 'MB' + suffix
+        return str(round(weight/(base[0]**2),1)) + base[3]
 
-def representTime(time):
-    if time < 60:
-        return str(time) + ' s'
-    elif time < 60*60:
-        return str(round(time/(60))) + ' mins'
-    else:
-        return str(round(time/(60*60),1)) + ' hours'
-
-# THIS CLASS IS FOR PROGRESSBAR
+# Progressbar (changing)
 class MonitoringProgress():
     def __init__(self):
-        self.maxlen = 0
+        self.prevlen = 0
+        self.avgspeed = 0
+        self.avgrate = self.maxrate = 5
+        self.sumspeed = 0
 
     def update(self, downloaded, content_length, speed):
-        if content_length == -1:
-            monitoring = '[unknown] ' + representWeight(downloaded,'')
+        if stopflag.locked(): return
+
+        if self.avgrate != 0:
+            self.sumspeed += speed
+            self.avgrate -= 1
         else:
-            monitoring = '['
+            self.avgspeed = round(self.sumspeed / self.maxrate)
+            self.avgrate = self.maxrate
+            self.sumspeed = 0
+
+        if content_length == -1:
+            monitoring = '\r[unknown] ' + representWeight(downloaded,INFQ)
+        else:
+            monitoring = '\r['
             progress = (downloaded/content_length)*100
             for i in range(int(progress/2)): monitoring += '='
             for i in range(50-int(progress/2)): monitoring += ' '
             monitoring += '] ' + str(round(progress,2)) + '%'
-            monitoring += ' ' + representWeight(downloaded,'') + '/' + representWeight(content_length,'')
-        monitoring += ' (' + representWeight(speed,'/s') + ')'
-        if content_length != -1:
-            monitoring += ' ~' + representTime(round((content_length-downloaded)/speed))
+            monitoring += ' ' + representWeight(downloaded,(KBSIZE,'','','')) + '/' + representWeight(content_length,INFQ)
+        monitoring += ' (' + representWeight(speed,SPD) + ')'
+        if content_length != -1 and self.avgspeed != 0:
+            monitoring += '[' + representWeight(round((content_length-downloaded)/self.avgspeed),TIME) + ']'
+        elif not(self.avgspeed): monitoring += '[calculating]'
 
         curlen = len(monitoring)
-        if curlen > self.maxlen: self.maxlen = curlen
-        else:
-            for i in range(self.maxlen-curlen): monitoring += ' '
-        print(monitoring, end='\r')
+        if self.prevlen > curlen:
+            for i in range(self.prevlen-curlen): monitoring += ' '
+        self.prevlen = curlen
+        print(monitoring,end='')
 
         if content_length != -1 and progress >= 100: self.complete('')
 
@@ -52,7 +66,7 @@ class MonitoringProgress():
         if message == '': print()
         else: print('\n'+message)
 
-# THIS CLASS IS FOR BUFFERING DATA IN RAM
+# Buffering data in RAM (stable)
 class BufToDisk:
     def __init__(self, size, path):
         self.buffer = b''
@@ -77,10 +91,9 @@ if not os.path.exists('DOWNLOADIAN_DOWNLOADS'):
 
 
 username, password = '', ''
-controlVars = {'proxy':['PROXY AUTHORIZATION',0], 'headers':['HEADERS DISPLAYING',0]}
+controlTriggers = {'proxy':['PROXY AUTHORIZATION',0], 'headers':['HEADERS DISPLAYING',0], 'removing':['CANCELED DOWNLOAD DATA REMOVING',1]}
 
-
-def download(url):
+def download(url,threadname):
     _indexAfterHTTP = url.index('//')+2
     _afterHTTP = url[_indexAfterHTTP:]
     domain, filename = '', 'DOWNLOADIAN_DOWNLOADS/'
@@ -108,15 +121,15 @@ def download(url):
 
     if os.path.exists(filename+ext):
         i = 1
-        while os.path.exists(filename+'(copy '+str(i)+')'+ext): i += 1
-        filename += '(copy '+str(i)+')'
+        while os.path.exists(filename+'(samename '+str(i)+')'+ext): i += 1
+        filename += '(samename '+str(i)+')'
     filename += ext
 
     asset = socket.socket()
     asset.connect((domain, 80))
 
     request = 'GET ' + url + ' HTTP/1.1\r\nHost:' + domain + '\r\n'
-    if controlVars['proxy']:
+    if controlTriggers['proxy']:
         request += 'Proxy-authorization: Basic ' + base64.encodestring((username+':'+password).encode('utf-8')).decode('utf-8') + '\r\n'
     request += '\r\n'
     asset.send(request.encode('utf-8'))
@@ -125,10 +138,12 @@ def download(url):
     while not('\r\n\r\n' in r.decode('utf-8')):
         r += asset.recv(1)
     _header = r.decode('utf-8')
-    if _header[:_header.index('\n')].split(' ')[1] == '200' and not(controlVars['headers'][1]):
+    if _header[:_header.index('\n')].split(' ')[1] == '200' and not(controlTriggers['headers'][1]):
         print(_header[:_header.index('\n')])
     else:
         print(_header[:-4])
+    print('Downloading in --> '+filename[filename.rindex('/')+1:])
+
 
     endcondition = 0
     try:
@@ -138,10 +153,10 @@ def download(url):
     except:
         endcondition = 1
 
-    maxtraffic = 10*1024*1024
+    maxtraffic = 10*KBSIZE**2
     downloaded = 0
     progress = 0.0
-    buffer = BufToDisk(5*1024*1024, filename)
+    buffer = BufToDisk(BFSIZE*KBSIZE**2, filename)
 
     r = b''
     def c0(): return downloaded < content_length
@@ -149,35 +164,53 @@ def download(url):
     conditions = (c0, c1)
 
 
-    if endcondition == 1: content_length = -1
+    if endcondition: content_length = -1
     monitoring = MonitoringProgress()
     while conditions[endcondition]():
         r = b''
         try:
-            time.sleep(1)
+            if stopflag.locked(): break
+            time.sleep(DOWNDELAY)
             while not(r):
-                asset.settimeout(10)
+                asset.settimeout(5)
                 r = asset.recv(maxtraffic)
         except:
             print('\n#UNEXPECTED NETWORK ERROR. DOWNLOADED DATA SAVED.')
             break
         buffer.write(r)
         downloaded += len(r)
-        monitoring.update(downloaded, content_length, len(r))
+        monitoring.update(downloaded, content_length, round(len(r)/DOWNDELAY))
 
-    if endcondition == 1: print()
+    if endcondition: print()
     buffer.close(1)
 
     asset.shutdown(1)
     asset.close()
 
+    if stopflag.locked():
+        if controlTriggers['removing'][1]: os.remove(filename)
+        print('#DOWNLOAD CANCELED. DOWNLOADED DATA ',end='')
+        if controlTriggers['removing'][1]: print('REMOVED.')
+        else: print('SAVED.')
+
+stopflag = threading.Lock()
 
 print('Downloadian 1.0')
 print('RTFM: just COPY-PASTE URL and press ENTER or type close/exit')
 while 1:
     url = input('> ')
     if url in ('close','exit'): break
-    if url in controlVars:
-        controlVars[url][1] = not(controlVars[url][1])
-        print('#'+controlVars[url][0]+' IS '+('OFF','ON')[controlVars[url][1]])
-    else: download(url)
+    if url == 'buffer': print(str(BFSIZE)+' MB')
+    elif url[:6] == 'buffer':
+        BFSIZE = int(url.split(' ')[1])
+        print('#BUFFER SET UP ON '+str(BFSIZE)+' MB')
+    elif url in controlTriggers:
+        controlTriggers[url][1] = not(controlTriggers[url][1])
+        print('#'+controlTriggers[url][0]+' IS '+('OFF','ON')[controlTriggers[url][1]])
+    else:
+        th = threading.Thread(target=download, args=(url,'Thread'))
+        th.start()
+        input() #for canceling
+        stopflag.acquire()
+        while threading.activeCount() > 1: pass
+        stopflag.release()
