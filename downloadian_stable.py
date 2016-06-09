@@ -160,7 +160,7 @@ def downloadCore(url,isResume,errors,autoResumeData):
     if controlTriggers['proxy'][1]:
         request += 'Proxy-authorization: Basic ' + base64.encodestring((username+':'+password).encode('utf-8')).decode('utf-8') + '\r\n'
     if isResume:
-        request += 'Range: bytes='+str(curfsize)+'-705327968\r\n' #replace 7053...
+        request += 'Range: bytes='+str(curfsize)+'-9999999999\r\n' #replace 7053...
     request += '\r\n'
     asset.send(request.encode('utf-8'))
 
