@@ -29,7 +29,7 @@ class MonitoringProgress():
         self.avgrate = self.maxrate = 5
         self.sumspeed = 0
 
-    def update(self, downloaded, content_length, speed):
+    def update(self, downloaded, content_length, speed, errors):
         if stopflag.locked(): return
 
         if self.avgrate != 0:
@@ -53,6 +53,7 @@ class MonitoringProgress():
         if content_length != -1 and self.avgspeed != 0:
             monitoring += '[' + representWeight(round((content_length-downloaded)/self.avgspeed),TIME) + ']'
         elif not(self.avgspeed): monitoring += '[calculating]'
+        monitoring += ' Errors:' + str(errors)
 
         curlen = len(monitoring)
         if self.prevlen > curlen:
@@ -93,7 +94,8 @@ if not os.path.exists('DOWNLOADIAN_DOWNLOADS'):
 username, password = '', ''
 controlTriggers = {'proxy':['PROXY AUTHORIZATION',0], 'headers':['HEADERS DISPLAYING',0], 'removing':['CANCELED DOWNLOAD DATA REMOVING',1]}
 
-def download(url,threadname):
+
+def extractRQData(url, isResume):
     _indexAfterHTTP = url.index('//')+2
     _afterHTTP = url[_indexAfterHTTP:]
     domain, filename = '', 'DOWNLOADIAN_DOWNLOADS/'
@@ -119,50 +121,92 @@ def download(url,threadname):
         filename += domain
         ext = '.html'
 
-    if os.path.exists(filename+ext):
-        i = 1
-        while os.path.exists(filename+'(samename '+str(i)+')'+ext): i += 1
-        filename += '(samename '+str(i)+')'
+    if not(isResume):
+        if os.path.exists(filename+ext):
+            i = 1
+            while os.path.exists(filename+'(samename '+str(i)+')'+ext): i += 1
+            filename += '(samename '+str(i)+')'
     filename += ext
 
-    asset = socket.socket()
-    asset.connect((domain, 80))
+    if isResume and not(os.path.exists(filename)):
+        print('#THERE IS NO '+str(filename[filename.index('/')+1:])+' IN MY DIRECTORY.')
+        filename = 'DOWNLOADIAN_DOWNLOADS/' + input('#PLEASE, ENTER FILENAME TO LOAD: ')
+
+    return (domain, filename)
+
+def downloadCore(url,isResume,errors,autoResumeData):
+    errorflag = 0
+
+    if not autoResumeData:
+        domain, filename = extractRQData(url, isResume)
+    else:
+        domain, filename = autoResumeData
+    curfsize = 0
+    if isResume:
+        curfsize = os.path.getsize(filename)
+
+    inflag.acquire()
+
+    asset = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    cflag = 1
+    while cflag:
+        try:
+            asset.connect((domain, 80))
+            cflag = 0
+        except:
+            if stopflag.locked(): break
 
     request = 'GET ' + url + ' HTTP/1.1\r\nHost:' + domain + '\r\n'
-    if controlTriggers['proxy']:
+    if controlTriggers['proxy'][1]:
         request += 'Proxy-authorization: Basic ' + base64.encodestring((username+':'+password).encode('utf-8')).decode('utf-8') + '\r\n'
+    if isResume:
+        request += 'Range: bytes='+str(curfsize)+'-705327968\r\n' #replace 7053...
     request += '\r\n'
     asset.send(request.encode('utf-8'))
 
+    # Receiving headers
     r = b''
     while not('\r\n\r\n' in r.decode('utf-8')):
         r += asset.recv(1)
     _header = r.decode('utf-8')
-    if _header[:_header.index('\n')].split(' ')[1] == '200' and not(controlTriggers['headers'][1]):
+    status_code = int(_header[:_header.index('\n')].split(' ')[1])
+    if status_code in (200, 206) and not autoResumeData and not controlTriggers['headers'][1]:
         print(_header[:_header.index('\n')])
     else:
-        print(_header[:-4])
-    print('Downloading in --> '+filename[filename.rindex('/')+1:])
+        if not autoResumeData: print(_header[:-4])
+        if autoResumeData and not(status_code == 206):
+            print('\n'+_header[:-4])
+            return 0
 
-
+    # Extracting Content-Length or trigger to another way of detecting the end of response body (payload)
     endcondition = 0
     try:
         _indexAfterContentLength = _header.index('Content-Length')+16
         _afterContentLength = _header[r.decode('utf-8').index('Content-Length')+16:]
         content_length = int(_header[_indexAfterContentLength:_indexAfterContentLength+_afterContentLength.index('\r\n')])
+        if not autoResumeData:
+            print('Downloading ('+representWeight(content_length,INFQ)+') in --> '+filename[filename.rindex('/')+1:])
     except:
         endcondition = 1
+        if not autoResumeData:
+            print('Downloading in --> '+filename[filename.rindex('/')+1:])
 
+    # A bit of prepataions and starting data download (first time or resuming)
     maxtraffic = 10*KBSIZE**2
-    downloaded = 0
-    progress = 0.0
+    if isResume:
+        loadedsize = os.path.getsize(filename)
+        _afterContentRange = _header[_header.index('Content-Range:'):]
+        fullsize = int(_afterContentRange[_afterContentRange.index('/')+1:_afterContentRange.index('\r\n')])
+        downloaded = loadedsize
+        content_length = fullsize
+    else:
+        downloaded = 0
     buffer = BufToDisk(BFSIZE*KBSIZE**2, filename)
 
     r = b''
     def c0(): return downloaded < content_length
     def c1(): return not(b'\r\n\r\n' in r)
     conditions = (c0, c1)
-
 
     if endcondition: content_length = -1
     monitoring = MonitoringProgress()
@@ -172,27 +216,42 @@ def download(url,threadname):
             if stopflag.locked(): break
             time.sleep(DOWNDELAY)
             while not(r):
-                asset.settimeout(5)
+                asset.settimeout(3)
                 r = asset.recv(maxtraffic)
         except:
-            print('\n#UNEXPECTED NETWORK ERROR. DOWNLOADED DATA SAVED.')
+            #print('\n#UNEXPECTED NETWORK ERROR. DOWNLOADED DATA SAVED.')
+            errorflag = 1
             break
         buffer.write(r)
         downloaded += len(r)
-        monitoring.update(downloaded, content_length, round(len(r)/DOWNDELAY))
+        monitoring.update(downloaded, content_length, round(len(r)/DOWNDELAY), errors)
 
-    if endcondition: print()
+    if endcondition and not errorflag: print()
     buffer.close(1)
 
     asset.shutdown(1)
     asset.close()
 
     if stopflag.locked():
-        if controlTriggers['removing'][1]: os.remove(filename)
+        if controlTriggers['removing'][1] and not(isResume): os.remove(filename)
         print('#DOWNLOAD CANCELED. DOWNLOADED DATA ',end='')
-        if controlTriggers['removing'][1]: print('REMOVED.')
+        if controlTriggers['removing'][1] and not(isResume): print('REMOVED.')
         else: print('SAVED.')
 
+    inflag.release()
+    if errorflag: return (domain, filename)
+    else: return 0
+
+def download(url,isResume):
+    errors = 0
+    r = downloadCore(url,isResume,0,())
+    while r:
+        errors += 1
+        r = downloadCore(url,1,errors,r)
+    #inflag.release()
+
+
+inflag = threading.Lock()
 stopflag = threading.Lock()
 
 print('Downloadian 1.0')
@@ -207,8 +266,20 @@ while 1:
     elif url in controlTriggers:
         controlTriggers[url][1] = not(controlTriggers[url][1])
         print('#'+controlTriggers[url][0]+' IS '+('OFF','ON')[controlTriggers[url][1]])
+    elif 'resume ' in url or ' resume' in url:
+        inurl = ''
+        if 'resume ' in url: inurl = url.split(' ')[1]
+        else: inurl = url.split(' ')[0]
+        th = threading.Thread(target=download, args=(inurl,1))
+        th.start()
+        while not(inflag.locked()):
+            time.sleep(1)
+        input()
+        stopflag.acquire()
+        while threading.activeCount() > 1: pass
+        stopflag.release()
     else:
-        th = threading.Thread(target=download, args=(url,'Thread'))
+        th = threading.Thread(target=download, args=(url,0))
         th.start()
         input() #for canceling
         stopflag.acquire()
