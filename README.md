@@ -13,6 +13,7 @@ Some tags for you: Sockets in Python (3.4, actually), HTTP protocol, Proxy autho
    3. Launch the program and type ```proxy```;
    4. Finally, COPY-and-PASTE URL and press ENTER.
 3. To cancel the download press ENTER while downloading.
+4. To resume type ```resume URL``` or ```URL resume``` (URL is your URL).
 
 ### Commands
 1. proxy - to enable or disable proxy
