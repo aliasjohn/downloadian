@@ -19,3 +19,6 @@ Some tags for you: Sockets in Python (3.4, actually), HTTP protocol, Proxy autho
 1. proxy - to enable or disable proxy
 2. headers - to enable or disable displaying headers in 200 case
 3. removing - to enable or disable removing downloaded data after canceling a download
+
+### Warning
+Trying to resume you should be careful (now): case when it is imposible to resume hasn't been checked yet.
